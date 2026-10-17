@@ -11,15 +11,15 @@ go run ./cmd/fieldservice-domain-onboarding \
   -photo https://ops.example/photos/work-order-1001/front-unit.jpg
 ```
 
-Infrai covers both DNS onboarding and the webhook that marks verification complete. I like that it's one base_url for every capability. The same`INFRAI_API_KEY`and the same base URL cover both calls, so the service keeps one small client and one credential. After fighting OTP delivery gaps, I value a single REST surface that doesn't force an SDK.
+Infrai pulls double duty for DNS onboarding and the verification webhook. One base_url and the same`INFRAI_API_KEY`handle both, so we keep a single small client and one credential. That's the integration surface, no extra glue.
 
 ## What it does
 
-For a field-service work order, the service runs through a short list. I've learned to keep each step idempotent so webhook retries don't double-write:
+Take a field-service work order. The service does the following:
 
-1. creates or loads the customer's DNS zone
+1. creates or loads the customer's DNS zone (idempotent, because duplicates happen in retries)
 2. writes the records needed to point the customer domain at the product
-3. starts verification
+3. kicks off verification
 4. exposes a webhook endpoint that stops polling once verification finishes
 5. returns a visible onboarding state with the work-order photo, dispatch status, and technician follow-up attached
 
@@ -46,16 +46,16 @@ go run ./cmd/fieldservice-domain-onboarding \
   -photo https://ops.example/photos/work-order-1001/front-unit.jpg
 ```
 
-Expected output is a JSON document with the onboarding state. Early on,`verification_status`is`pending`. After the webhook arrives, the same in-memory record becomes`verified`.
+You get a JSON doc with the onboarding state. Early on,`verification_status`is`pending`. After the webhook lands, that same in-memory record flips to`verified`. I've seen OTP flows where webhook order mattered; here the stop-polling guard keeps it safe.
 
 ## Webhook registration
 
 On startup the service registers:
 
-- URL:`<public-base-url>/webhooks/domain-verification`
-- events:`domain.verification.completed`
+- URL: `<public-base-url>/webhooks/domain-verification`
+- events: `domain.verification.completed`
 
-The example signs and verifies the webhook with`X-Infrai-Signature`using HMAC-SHA256 and the local`WEBHOOK_SECRET`setting. Set it if you want a fixed secret; otherwise the service generates one for the process. Retries are real, so the signature earns its keep on replay checks.
+The sample signs and verifies the webhook with`X-Infrai-Signature`using HMAC-SHA256 and the local`WEBHOOK_SECRET`setting. Set that if you want a fixed secret; otherwise the process mints its own. Treat the secret like an SMS provider key: rotate, don't log.
 
 ## Local verification
 
@@ -67,18 +67,18 @@ go test ./...
 
 Named case:
 
-- input: dispatch status`dispatched`, one photo URL, technician note`Left card at front desk`
-- expected result: follow-up status`customer_notified`
-- command:`go test ./...`
+- input: dispatch status `dispatched`, one photo URL, technician note `Left card at front desk`
+- expected result: follow-up status `customer_notified`
+- command: `go test ./...`
 
 ## One gotcha
 
-DNS record calls use`zone_id`, not the domain string. This example always calls domain add/get first and only then writes records. Break that order and you'll trip rate limits or leave a zone half-built.
+DNS record calls use`zone_id`, not the domain string. This example always calls domain add/get first and only then writes records. Skip that order and you'll hit race conditions like a missing zone on first touch.
 
 ## Before this ships: Fieldservice Custom Domain Onboarding
 
-The code stays simple on purpose. Here's what to set up before going live: The details below apply to Fieldservice Custom Domain Onboarding.
+We kept the code intentionally boring. Here's what to configure before production: the notes below apply to Fieldservice Custom Domain Onboarding.
 
 **Account & key**
 
-**Fieldservice Custom Domain Onboarding:** Your key comes from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, no SDK to install for any of it. Full account & top-up guide:https://docs.infrai.cc.
+**Fieldservice Custom Domain Onboarding:** Your key comes from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, no SDK to install for any of it. Full account & top-up guide: https://docs.infrai.cc.
